@@ -1,0 +1,239 @@
+#include <Arduino.h>
+#include <HCSR04.h>
+
+//initialise HCSR04 (trig pin , echo pin)
+HCSR04 centrehc(5, 18); 
+HCSR04 lefthc(19, 21);
+HCSR04 righthc(16, 17);
+
+//initialise variables
+double temp; double tempL; double tempR;
+double resp; double respL; double respR; double dv;
+double alpha; double beta; double angle;
+bool motorFwd;
+double multiplier = 5;
+
+//defining L298N pin 
+//ENA & ENB pins are speed control, IN1& IN2 and IN3 & IN4 are direction control
+static int IN1=26;
+static int IN2=25;
+static int enaA=14;
+static int IN3=33;
+static int IN4=32;
+static int enaB=27;
+
+//fuzzy variables
+static int target_dist = 50;
+static int fuzzy_step = 10;
+
+//implement motor direction
+void MotorBreak(){
+  digitalWrite(IN1,LOW);
+  digitalWrite(IN2,LOW);
+  digitalWrite(IN3,LOW);
+  digitalWrite(IN4,LOW);
+  delay(10);
+}
+
+void MotorFwd(){
+ // MotorBreak();
+  digitalWrite(IN1,HIGH);
+  digitalWrite(IN2,LOW);
+  digitalWrite(IN3,HIGH);
+  digitalWrite(IN4,LOW);
+  delay(10);
+  motorFwd=true;
+}
+
+void MotorBkwd(){
+  //MotorBreak();
+  digitalWrite(IN1,LOW);
+  digitalWrite(IN2,HIGH);
+  digitalWrite(IN3,LOW);
+  digitalWrite(IN4,HIGH);
+  delay(10);
+  motorFwd=false;
+}
+
+void setup()
+{ 
+  Serial.begin(9600); 
+  analogWrite(enaB, 0);
+  analogWrite(enaA, 0);
+  
+  pinMode(IN1, OUTPUT);
+  pinMode(IN2, OUTPUT);
+  pinMode(IN3, OUTPUT);
+  pinMode(IN4, OUTPUT);
+
+  MotorBreak();
+}
+
+//define FLC function
+double fuzzify(double val, double low, double high){
+  if((val>low)&(val<=high)){
+    double halfrange=(high-low)/2;
+    double ration=abs((halfrange)-abs(halfrange-(val-low)));
+    return double(ration/halfrange);
+  }
+  else {
+    return 0;
+  }
+}
+
+//initiate speed variables as 0
+int speed=0;
+int speedL=0;
+int speedR=0;
+void loop()
+{
+
+    //void 0 readings from HC-SR04 as errors
+    temp = centrehc.dist();
+    if (temp!=0){
+      resp=temp;
+    }
+    delay(60);
+    
+    tempL = lefthc.dist();
+    if (tempL!=0){
+      respL=tempL;
+    }
+    delay(60);
+   
+    tempR = righthc.dist();
+    if (tempR!=0){
+      respR=tempR;
+    }
+    delay(60);    
+    //use over 60ms measurement cycle to prevent trigger signal interrupting to the echo signal
+
+    //implement the FLC membership functions
+    double vvlow = -20*fuzzify(resp,target_dist-4*fuzzy_step,target_dist-2*fuzzy_step); 
+    double vlow = -15*fuzzify(resp,target_dist-3*fuzzy_step,target_dist-fuzzy_step);
+    double low = -10*fuzzify(resp,target_dist-2*fuzzy_step,target_dist);
+    double good = fuzzify(resp,target_dist-fuzzy_step,target_dist+fuzzy_step);
+    double high = 10*fuzzify(resp,target_dist,target_dist+2*fuzzy_step);
+    double vhigh = 15*fuzzify(resp,target_dist+fuzzy_step,target_dist+3*fuzzy_step);
+    double vvhigh = 20*fuzzify(resp,target_dist+2*fuzzy_step,target_dist+4*fuzzy_step);
+
+    //flatten triangles to max/min values
+    if ((resp>0)&(resp<=(target_dist-3.5*fuzzy_step))){
+      vvlow = -25.5;
+    }
+    if (resp>(target_dist+3.5*fuzzy_step)){
+      vvhigh = 25.5;
+    }
+
+    //determine addition or subtraction of good depending on distance
+    if (resp<target_dist){
+      good = good*5;
+    }
+    else if (resp<target_dist){
+      good = good*-5;
+    }
+
+    //adding a 2cm error band and minimum movement value
+    if ((resp-target_dist>=2) & (resp-target_dist<=9)){
+      dv = 8.5;
+    }
+    else if ((resp-target_dist<=-2) & (resp-target_dist>=-9)){
+      dv = -8.5;
+    }
+    else if (abs(resp-target_dist)<1){
+      dv = 0;
+    }
+    else {
+      dv = (vvlow+vlow+low+good+high+vhigh+vvhigh);
+    }
+
+    //defuzzify output to PWM value
+    speed = int(dv*2*multiplier);
+
+
+    //angle calculations between 0.5 and 3
+    if ((abs((respR+respL)/2-resp)>3)&(respR-target_dist>0)){
+      alpha = 10;
+      beta = -10;
+      angle = (abs(alpha)+abs(beta))/2;
+    }
+    else if ((abs((respR+respL)/2-resp)>3)&(respR-target_dist<0)){
+      alpha = -10;
+      beta = 10;
+      angle = (abs(alpha)+abs(beta))/2;
+    }
+    else if (abs((respR+respL)/2-resp)<=0.5){
+      angle = 0;
+    }
+    else{
+      alpha = atan(abs((respR+respL)/2-resp)/97.5);
+      beta = -alpha;
+      angle = 500*((abs(alpha)+abs(beta))/2);
+    }
+
+    //torque vectoring
+    if ((alpha<0)&(beta>0)){
+      speedL = speed-(10*angle);
+      speedR = speed+(10*angle);
+    }
+    else if((alpha>0)&(beta<0)){
+      speedL = speed+(10*angle);
+      speedR = speed-(10*angle);
+    }
+    else {
+      speedL=speed;
+      speedR=speed;
+    }
+
+    //define speed value boundaries
+    if (speedL>=255){
+      speedL=255;
+    }
+    if (speedR>=255){
+      speedR=255;
+    }
+    if (speedL<=-255){
+      speedL=-255;
+    }
+    if (speedR<=-255){
+      speedR=-255;
+    }
+
+
+    //output motor control when speed is below zero
+     if ((speedR<=0) & motorFwd){
+      MotorBkwd();
+      analogWrite(enaA, abs(speedR));
+    }     
+     if ((speedL<=0) & motorFwd){
+      MotorBkwd();
+      analogWrite(enaB, abs(speedL));
+    }
+
+     if ((speedR<=0) & !motorFwd){
+      MotorBkwd();
+      analogWrite(enaA, abs(speedR));
+    }
+     if ((speedR<=0) & !motorFwd){
+      MotorBkwd();
+      analogWrite(enaB, abs(speedL));
+    }
+    //output motor control when speed is above zero
+    if ((speedR>0) & !motorFwd) {
+      MotorFwd();
+      analogWrite(enaA, abs(speedR));
+    }
+    if ((speedL>0) & !motorFwd) {
+      MotorFwd();
+      analogWrite(enaB, abs(speedL));
+    }
+
+    if ((speedR>0) & motorFwd) {
+      MotorFwd();
+      analogWrite(enaA, abs(speedR));
+    }
+    if ((speedL>0) & motorFwd) {
+      MotorFwd();
+      analogWrite(enaB, abs(speedL));
+    }
+}
