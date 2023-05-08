@@ -153,13 +153,13 @@ void loop()
 
     //angle calculations between 0.5 and 3
     if ((abs((respR+respL)/2-resp)>3)&(respR-target_dist>0)){
-      alpha = 10;
-      beta = -10;
+      alpha = 17;
+      beta = -17;
       angle = (abs(alpha)+abs(beta))/2;
     }
     else if ((abs((respR+respL)/2-resp)>3)&(respR-target_dist<0)){
-      alpha = -10;
-      beta = 10;
+      alpha = -17;
+      beta = 17;
       angle = (abs(alpha)+abs(beta))/2;
     }
     else if (abs((respR+respL)/2-resp)<=0.5){
@@ -173,12 +173,12 @@ void loop()
 
     //torque vectoring
     if ((alpha<0)&(beta>0)){
-      speedL = speed-(10*angle);
-      speedR = speed+(10*angle);
+      speedL = speed-(7*angle);
+      speedR = speed+(7*angle);
     }
     else if((alpha>0)&(beta<0)){
-      speedL = speed+(10*angle);
-      speedR = speed-(10*angle);
+      speedL = speed+(7*angle);
+      speedR = speed-(7*angle);
     }
     else {
       speedL=speed;
